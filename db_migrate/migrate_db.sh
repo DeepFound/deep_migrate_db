@@ -184,7 +184,8 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 		mysqldump -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT --no-data --skip-add-drop-table --skip-comments $db > $BASE_DIR/$dir/$db/the-schema	
 	done
 	#convert engine to deep within the schema dump
-	find $BASE_DIR/$dir/ -name 'the-schema'| xargs perl -pi -e 's/ENGINE=InnoDB/ENGINE=DeepDB/g'
+	#find $BASE_DIR/$dir/ -name 'the-schema'| xargs perl -pi -e 's/ENGINE=InnoDB/ENGINE=DeepDB/g'
+	#find $BASE_DIR/$dir/ -name 'the-schema'| xargs perl -pi -e 's/ENGINE=DeepDB/ENGINE=InnoDB/g'
 
 	if [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 0 ] ; then
 		#create all the db's on the new db (over network)
@@ -272,13 +273,13 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 								echo "source and destination DO NOT MATCH! Source:$num_rows_source rows.  Dest:$num_rows_dest rows  WHERE $unique_key >= $limit_start AND $unique_key < $limit_end"
 							elif [ "$VALIDATE" -eq 0 ]; then
 								echo "$echotext chunk $j of $num_chunks for $db.$table where $unique_key >= $limit_start AND $unique_key < $limit_end"
-								( echo "SET unique_checks=0;SET autocommit=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
+								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
 							fi
 
 						elif [ "$ACTION" == "DUMP" ]; then
 							echo "$echotext chunk $j of $num_chunks for $db.$table where $unique_key >= $limit_start AND $unique_key < $limit_end"
 							if [ "$FORMAT" == "SQL" ] ; then
-								( echo "SET unique_checks=0;SET autocommit=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
+								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
 							elif [ "$FORMAT" == "INFILE" ] ; then
 								mysql -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end" 2>> $BASE_DIR/migrate_db.errors.log &
 							else
@@ -302,10 +303,10 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 						echo "$echotext chunk $j of $num_chunks for $db.$table where LIMIT $limit_start, $CHUNK_SIZE"
 						if [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 0 ] ; then
 							#mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --max_allowed_packet=1000000000 --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table | mysql --max_allowed_packet=1000000000 -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db 2>> $BASE_DIR/migrate_db.errors.log &
-							( echo "SET unique_checks=0;SET autocommit=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
+							( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
 						elif [ "$ACTION" == "DUMP" ]; then
 							if [ "$FORMAT" == "SQL" ] ; then
-								( echo "SET unique_checks=0;SET autocommit=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
+								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
 							elif [ "$FORMAT" == "INFILE" ] ; then
 								mysql -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table LIMIT $limit_start, $CHUNK_SIZE" 2>> $BASE_DIR/migrate_db.errors.log &
 							else
@@ -323,7 +324,7 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 
 				if [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 0 ] ; then
 					#mysqldump -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table | mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db 2>> $BASE_DIR/migrate_db.errors.log &
-					( echo "SET unique_checks=0;SET autocommit=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-0.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table-0.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-0.sql ; rm $BASE_DIR/$dir/$db/$table-0.sql ) &
+					( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-0.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table-0.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-0.sql ; rm $BASE_DIR/$dir/$db/$table-0.sql ) &
 				
 				elif [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 1 ] ; then
 					num_rows_source=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT $db -BNe "SELECT COUNT(*) FROM $db.$table;")
@@ -335,7 +336,7 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 					fi					
 				elif [ "$ACTION" == "DUMP" ]; then
 					if [ "$FORMAT" == "SQL" ] ; then
-						(echo "SET unique_checks=0;SET autocommit=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table.sql; mysqldump -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
+						(echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table.sql; mysqldump -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
 					elif [ "$FORMAT" == "INFILE" ] ; then
 						mysql -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.1' FROM $db.$table" 2>> $BASE_DIR/migrate_db.errors.log &
 					else
