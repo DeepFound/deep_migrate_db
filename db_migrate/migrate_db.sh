@@ -2,29 +2,35 @@
 
 usage()
 {
-
 	un='\033[4m'
 	end='\033[00m'
 	bold='\033[1m'
-
-    echo -e "${bold}USAGE:${end} $0 [options] [action (DUMP|LOAD|BOTH)] [database(s) (grep regex)] [table];"
+    echo -e "${bold}USAGE:${end} $0 [options] [action (DUMP|LOAD|MIGRATE)] [database(s) (grep regex)] [table];"
     echo -e "${bold}OPTIONS:${end}"
-    echo -e " ${bold}-u${end} ${un}USER${end}, ${bold}--mysql_user${end}=${un}USER${end}"
+    echo -e " ${bold}--source_mysql_user${end}=${un}USER${end}"
     echo -e "            source mysql username to be used. current user is used if not specified."
-    echo -e " ${bold}-p${end}, --mysql_pass=${un}PASSWORD${end}"
+    echo -e " ${bold}--source_mysql_pass=${un}PASSWORD${end}"
     echo -e "            source mysql password to be used."  
-    echo -e " ${bold}--socket${end}=${un}SOCKET_FILE${end}"
-    echo -e "            source socket file to be used."   
-    echo -e " ${bold}--port${end}=${un}PORT${end}"
+    echo -e " ${bold}--source_mysql_host${end}=${un}HOST${end}"
+    echo -e "            destination mysql host. Used for MIGRATE action only." 
+    echo -e " ${bold}--source_mysql_port${end}=${un}PORT${end}"
     echo -e "            source port to be used." 
-    echo -e " ${bold}--dest_host${end}=${un}HOST${end}"
-    echo -e "            destination mysql host. Used for BOTH action only."    
-    echo -e " ${bold}--dest_mysql_user${end}=${un}USER${end}"
-    echo -e "            destination mysql user. Used for BOTH action only. current user is used if not specified."
-    echo -e " ${bold}--dest_mysql_pass${end}=${un}PASSWORD${end}"
-    echo -e "            destination mysql password. Used for BOTH action only." 
-    echo -e " ${bold}--dest_port${end}=${un}DEST_PORT${end}"
-    echo -e "            destination source port to be used." 
+    echo -e " ${bold}--source_mysql_socket${end}=${un}SOCKET_FILE${end}"
+    echo -e "            source socket file to be used."
+    echo -e " ${bold}--source_mysql_engine${end}=${un}ENGINE${end}"
+    echo -e "            source mysql database engine. "
+    echo -e " ${bold}--destination_mysql_user${end}=${un}USER${end}"
+    echo -e "            destination mysql user. Used for MIGRATE action only. current user is used if not specified."
+    echo -e " ${bold}--destination_mysql_pass${end}=${un}PASSWORD${end}"
+    echo -e "            destination mysql password. Used for MIGRATE action only."
+    echo -e " ${bold}--destination_mysql_host${end}=${un}HOST${end}"
+    echo -e "            destination mysql host. Used for MIGRATE action only." 
+    echo -e " ${bold}--destination_mysql_port${end}=${un}DEST_PORT${end}"
+    echo -e "            destination source port to be used."
+    echo -e " ${bold}--destination_mysql_socket${end}=${un}SOCKET_FILE${end}"
+    echo -e "            source socket file to be used."
+    echo -e " ${bold}--destination_mysql_engine${end}=${un}ENGINE${end}"
+    echo -e "            destination mysql database engine. "
     echo -e " ${bold}--max_threads${end}=${un}NUM_THREADS${end}"
     echo -e "            max parrallel processes used. default is half your processors (best)"
     echo -e " ${bold}--chunk_size${end}=${un}SIZE${end}"
@@ -36,9 +42,14 @@ usage()
     echo -e " ${bold}--format${end}=${un}FORMAT${end}"
     echo -e "            format of the data to be loaded or dumped. either SQL(default) or INFILE."    
     echo -e " ${bold}--validate${end}"
-    echo -e "            validate the number of rows on the source and destination. for BOTH option only."  
+    echo -e "            validate the number of rows on the source and destination. for MIGRATE option only."  
     echo -e " ${bold}--crc${end}"
-    echo -e "            validate tables match on source and destination using CHECKSUM TABLE. for BOTH option only."
+    echo -e "            validate tables match on source and destination using CHECKSUM TABLE. for MIGRATE option only."
+    echo -e " "
+    echo -e "notes:"
+    echo -e "If no database is specified, we migrate all databases."
+	echo -e "If no table is specified, we migrate all tables. (either 1 or all)"
+	echo -e " "
     exit 0;
 }
 
@@ -47,22 +58,28 @@ SCRIPT=$(readlink -f $0)
 # Absolute path this script is in. /home/user/bin
 SCRIPTPATH=`dirname $SCRIPT`
 
-TEMP=`getopt -o u:p:h: --long mysql_user:,mysql_pass:,dest_host:,socket:,port:,dest_port:,dest_mysql_user:,dest_mysql_pass:,max_threads:,chunk_size:,base_dir:,load_dir:,format:,validate,crc,help -n 'migrate_db' -- "$@"`
+TEMP=`getopt -o u:p:h: --long source_mysql_user:,source_mysql_pass:,source_mysql_host:,source_mysql_port:,source_mysql_socket:,destination_mysql_user:,destination_mysql_pass:,destination_mysql_host:,destination_mysql_port:,max_threads:,chunk_size:,base_dir:,load_dir:,format:,source_mysql_engine:,destination_mysql_engine:,validate,crc,help -n 'migrate_db' -- "$@"`
 if [ $? != 0 ] ; then usage >&2 ; exit 1 ; fi
 eval set -- "$TEMP"
 
-MYSQL_USER=`whoami`
-MYSQL_PASS=
-dest_ip=
-REMOTE_MYSQL_USER=`whoami`
-REMOTE_MYSQL_PASS=
-MAX_THREADS=$(( $(cat /proc/cpuinfo | grep -c processor) / 2 ))
+SOURCE_MYSQL_USER=
+SOURCE_MYSQL_PASS=
+SOURCE_MYSQL_HOST=
+SOURCE_MYSQL_PORT=
+SOURCE_MYSQL_SOCKET=
+SOURCE_MYSQL_ENGINE=
+
+DESTINATION_MYSQL_USER=
+DESTINATION_MYSQL_PASS=
+DESTINATION_MYSQL_HOST=
+DESTINATION_MYSQL_PORT=
+DESTINATION_MYSQL_SOCKET=
+DESTINATION_MYSQL_ENGINE=
+
+MAX_THREADS=$(cat /proc/cpuinfo | grep -c processor)
 CHUNK_SIZE=400000
 BASE_DIR=`pwd`
 LOAD_DIR=
-SOCKET_FILE=
-PORT=
-DEST_PORT=
 FORMAT=SQL
 VALIDATE=0
 CRC=0
@@ -71,14 +88,18 @@ START_TIME=$SECONDS
 
 while true; do
   case "$1" in
-    -u | --mysql_user ) MYSQL_USER="$2"; shift 2 ;;
-    -p | --mysql_pass ) MYSQL_PASS="$2"; shift 2 ;;
-    -h | --dest_host ) dest_ip="$2"; shift 2 ;;
-	--socket ) SOCKET_FILE="--socket=$2"; shift 2 ;;
-	--port ) PORT="--port=$2"; shift 2 ;;
-    --dest_mysql_user ) REMOTE_MYSQL_USER="$2"; shift 2 ;;
-    --dest_mysql_pass ) REMOTE_MYSQL_PASS="$2"; shift 2 ;;
-	--dest_port ) DEST_PORT="--port=$2"; shift 2 ;;
+    -u | --source_mysql_user ) SOURCE_MYSQL_USER="$2"; shift 2 ;;
+    -p | --source_mysql_pass ) SOURCE_MYSQL_PASS="$2"; shift 2 ;;
+    -h | --source_mysql_host ) SOURCE_MYSQL_HOST="-h$2"; shift 2 ;;
+    --source_mysql_port ) SOURCE_MYSQL_PORT="--port=$2"; shift 2 ;;
+    --source_mysql_socket ) SOURCE_MYSQL_SOCKET="--socket=$2"; shift 2 ;;
+    --source_mysql_engine ) SOURCE_MYSQL_ENGINE="$2"; shift 2 ;;
+    --destination_mysql_user ) DESTINATION_MYSQL_USER="$2"; shift 2 ;;
+    --destination_mysql_pass ) DESTINATION_MYSQL_PASS="$2"; shift 2 ;;
+    --destination_mysql_host ) DESTINATION_MYSQL_HOST="-h$2"; shift 2 ;;
+    --destination_mysql_port ) DESTINATION_MYSQL_PORT="--port=$2"; shift 2 ;;
+	--destination_mysql_socket ) DESTINATION_MYSQL_SOCKET="--socket=$2"; shift 2 ;;
+	--destination_mysql_engine ) DESTINATION_MYSQL_ENGINE="$2"; shift 2 ;;
     --max_threads ) MAX_THREADS="$2"; shift 2 ;;
     --chunk_size ) CHUNK_SIZE="$2"; shift 2 ;;
     --base_dir ) BASE_DIR="$2"; shift 2 ;;
@@ -92,9 +113,9 @@ while true; do
   esac
 done
 
-ACTION=$1  # DUMP, LOAD, BOTH
-if [ "$ACTION" != "DUMP" ] && [ "$ACTION" != "LOAD" ] && [ "$ACTION" != "BOTH" ] ; then
-	echo "You must specify either LOAD, DUMP or BOTH for an action"
+ACTION=$1  # DUMP, LOAD, MIGRATE
+if [ "$ACTION" != "DUMP" ] && [ "$ACTION" != "LOAD" ] && [ "$ACTION" != "MIGRATE" ] ; then
+	echo "You must specify either DUMP, LOAD or MIGRATE for an action"
 	usage
 	exit;
 fi
@@ -115,25 +136,47 @@ if [ "$ACTION" == "LOAD" ] ; then
 	fi
 fi
 
-if [ -n "$MYSQL_PASS" ] ; then
-	MYSQL_PASS="-p$MYSQL_PASS"
+if [ -n "$SOURCE_MYSQL_PASS" ] ; then
+	SOURCE_MYSQL_PASS="-p$SOURCE_MYSQL_PASS"
 fi
-if [ -n "$REMOTE_MYSQL_PASS" ] ; then
-	REMOTE_MYSQL_PASS="-p$REMOTE_MYSQL_PASS"
+if [ -n "$DESTINATION_MYSQL_PASS" ] ; then
+	DESTINATION_MYSQL_PASS="-p$DESTINATION_MYSQL_PASS"
+fi
+if [ -n "$SOURCE_MYSQL_USER" ] ; then
+	SOURCE_MYSQL_USER="-u$SOURCE_MYSQL_USER"
+fi
+if [ -n "$DESTINATION_MYSQL_USER" ] ; then
+	DESTINATION_MYSQL_USER="-u$DESTINATION_MYSQL_USER"
 fi
 
-echo "Checking MySQL connection..."
-mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -e exit 2>/dev/null
-if [ $? -ne 0 ]; then
-	echo "Failed to connect to MySQL (localhost) using user:$MYSQL_USER pass:$MYSQL_PASS "
-	exit;
-fi
+SOURCE_CONNECTION_STRING=" $SOURCE_MYSQL_USER $SOURCE_MYSQL_PASS $SOURCE_MYSQL_HOST $SOURCE_MYSQL_SOCKET $SOURCE_MYSQL_PORT "
+DESTINATION_CONNECTION_STRING=" $DESTINATION_MYSQL_USER $DESTINATION_MYSQL_PASS $DESTINATION_MYSQL_HOST $DESTINATION_MYSQL_SOCKET $DESTINATION_MYSQL_PORT "
 
-if [ "$ACTION" == "BOTH" ] ; then
-	echo "Checking remote MySQL connection..."
-	mysql -h"$dest_ip" -u"$REMOTE_MYSQL_USER" $REMOTE_MYSQL_PASS $DEST_PORT -e exit 2>/dev/null
+if [ "$ACTION" == "MIGRATE" ] ; then
+	echo "Checking source MySQL connection..."
+	mysql $SOURCE_CONNECTION_STRING -e exit 2>/dev/null
 	if [ $? -ne 0 ]; then
-		echo "Failed to connect to MySQL ($dest_ip) using user:$REMOTE_MYSQL_USER pass:$REMOTE_MYSQL_PASS "
+		echo "Failed to connect to source MySQL using $SOURCE_CONNECTION_STRING"
+		exit;
+	fi
+	echo "Checking destination MySQL connection..."
+	mysql $DESTINATION_CONNECTION_STRING -e exit 2>/dev/null
+	if [ $? -ne 0 ]; then
+		echo "Failed to connect to source MySQL using $DESTINATION_CONNECTION_STRING"
+		exit;
+	fi
+elif [ "$ACTION" == "LOAD" ] ; then
+	echo "Checking destination MySQL connection..."
+	mysql $DESTINATION_CONNECTION_STRING -e exit 2>/dev/null
+	if [ $? -ne 0 ]; then
+		echo "Failed to connect to source MySQL using $DESTINATION_CONNECTION_STRING"
+		exit;
+	fi
+elif [ "$ACTION" == "DUMP" ] ; then
+	echo "Checking source MySQL connection..."
+	mysql $SOURCE_CONNECTION_STRING -e exit 2>/dev/null
+	if [ $? -ne 0 ]; then
+		echo "Failed to connect to source MySQL using $SOURCE_CONNECTION_STRING"
 		exit;
 	fi
 fi
@@ -150,14 +193,20 @@ else
 	TABLE_GREP_REGEX="/*"
 fi
 
-echo MYSQL_USER=$MYSQL_USER
-echo MYSQL_PASS=$MYSQL_PASS
-echo dest_ip=$dest_ip
-echo SOCKET_FILE=$SOCKET_FILE
-echo PORT=$PORT
-echo DEST_PORT=$DEST_PORT
-echo REMOTE_MYSQL_USER=$REMOTE_MYSQL_USER
-echo REMOTE_MYSQL_PASS=$REMOTE_MYSQL_PASS
+echo SOURCE_MYSQL_USER=$SOURCE_MYSQL_USER
+echo SOURCE_MYSQL_PASS=$SOURCE_MYSQL_PASS
+echo SOURCE_MYSQL_HOST=$SOURCE_MYSQL_HOST
+echo SOURCE_MYSQL_PORT=$SOURCE_MYSQL_PORT
+echo SOURCE_MYSQL_SOCKET=$SOURCE_MYSQL_SOCKET
+echo SOURCE_MYSQL_ENGINE=$SOURCE_MYSQL_ENGINE
+echo SOURCE_CONNECTION_STRING=$SOURCE_CONNECTION_STRING
+echo DESTINATION_MYSQL_USER=$DESTINATION_MYSQL_USER
+echo DESTINATION_MYSQL_PASS=$DESTINATION_MYSQL_PASS
+echo DESTINATION_MYSQL_HOST=$DESTINATION_MYSQL_HOST
+echo DESTINATION_MYSQL_PORT=$DESTINATION_MYSQL_PORT
+echo DESTINATION_MYSQL_SOCKET=$DESTINATION_MYSQL_SOCKET
+echo DESTINATION_MYSQL_ENGINE=$DESTINATION_MYSQL_ENGINE
+echo DESTINATION_CONNECTION_STRING=$DESTINATION_CONNECTION_STRING
 echo MAX_THREADS=$MAX_THREADS
 echo CHUNK_SIZE=$CHUNK_SIZE
 echo ACTION=$ACTION
@@ -171,27 +220,29 @@ echo TABLE_GREP_REGEX=$TABLE_GREP_REGEX
 
 : > $BASE_DIR/migrate_db.errors.log
 
-if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
+if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "MIGRATE" ] ; then
 
 	dir=$(date "+%Y-%m-%d_%Hh%Mm%Ss")
 	mkdir -m 777 -p $BASE_DIR/$dir
 
-	list_of_dbs=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "show databases" | grep "$GREP_REGEX" | grep -v "information_schema")
-
+	list_of_dbs=$(mysql $SOURCE_CONNECTION_STRING -BNe "show databases" | grep "$GREP_REGEX" | grep -v "information_schema" | grep -v "performance_schema" | grep -v "mysql")
 	#dump the schema skeleton of all databases (no data)
 	for db in $list_of_dbs ; do 
 		mkdir -m 777 $BASE_DIR/$dir/$db
-		mysqldump -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT --no-data --skip-add-drop-table --skip-comments $db > $BASE_DIR/$dir/$db/the-schema	
+		mysqldump $SOURCE_CONNECTION_STRING --no-data --skip-add-drop-table --skip-comments $db > $BASE_DIR/$dir/$db/the-schema	
 	done
-	#convert engine to deep within the schema dump
-	#find $BASE_DIR/$dir/ -name 'the-schema'| xargs perl -pi -e 's/ENGINE=InnoDB/ENGINE=DeepDB/g'
-	#find $BASE_DIR/$dir/ -name 'the-schema'| xargs perl -pi -e 's/ENGINE=DeepDB/ENGINE=InnoDB/g'
 
-	if [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 0 ] ; then
+	#if defined, convert engine from $SOURCE_MYSQL_ENGINE to $DESTINATION_MYSQL_ENGINE within the schema dump
+	if [ -n "$SOURCE_MYSQL_ENGINE" ] && [ -n "$DESTINATION_MYSQL_ENGINE" ] ; then
+		echo "Converting all tables ENGINEs from $SOURCE_MYSQL_ENGINE to $DESTINATION_MYSQL_ENGINE"
+		find $BASE_DIR/$dir/ -name 'the-schema'| xargs perl -pi -e "s/ENGINE=$SOURCE_MYSQL_ENGINE/ENGINE=$DESTINATION_MYSQL_ENGINE/g"
+	fi
+
+	if [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 0 ] ; then
 		#create all the db's on the new db (over network)
 		for db in $list_of_dbs ; do 
-			mysql -u"$REMOTE_MYSQL_USER" $REMOTE_MYSQL_PASS -h"$dest_ip" $DEST_PORT -e "CREATE DATABASE $db;"
-			mysql -u"$REMOTE_MYSQL_USER" $REMOTE_MYSQL_PASS -h"$dest_ip" $DEST_PORT $db < $BASE_DIR/$dir/$db/the-schema
+			mysql $DESTINATION_CONNECTION_STRING -e "CREATE DATABASE $db;"
+			mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/the-schema
 		done
 	fi
 
@@ -206,29 +257,29 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 	for db in $list_of_dbs ; do 
 	
 		if [ "$TABLE_GREP_REGEX" == "/*" ] ; then
-			list_of_tables=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "show tables" $db | grep "$TABLE_GREP_REGEX")
+			list_of_tables=$(mysql $SOURCE_CONNECTION_STRING -BNe "show tables" $db | grep "$TABLE_GREP_REGEX")
 		else
-			list_of_tables=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "show tables" $db | grep -x "$TABLE_GREP_REGEX")
+			list_of_tables=$(mysql $SOURCE_CONNECTION_STRING -BNe "show tables" $db | grep -x "$TABLE_GREP_REGEX")
 		fi
 
 		for table in $list_of_tables ; do
 			echo "$echotext database $db table $table ..."
-			#if [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 0 ] ; then
+			#if [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 0 ] ; then
 				#collect insertion rate stats
-			#	$SCRIPTPATH/get_rate.sh -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS -h$dest_ip $db.$table&
+			#	$SCRIPTPATH/get_rate.sh -u$DESTINATION_MYSQL_USER $DESTINATION_MYSQL_PASS $DESTINATION_MYSQL_HOST $db.$table&
 			#fi
 
-			unique_key=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "SHOW KEYS IN $table FROM $db WHERE Non_unique=0 AND Key_name='PRIMARY';" | awk '{ print $5 '})
-			num_columns_in_key=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "SHOW KEYS IN $table FROM $db WHERE Non_unique=0 AND Key_name='PRIMARY' ;" | wc -l)
-			unique_key_data_type=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA ='$db' AND TABLE_NAME = '$table' AND COLUMN_NAME = '$unique_key';")
+			unique_key=$(mysql $SOURCE_CONNECTION_STRING -BNe "SHOW KEYS IN $table FROM $db WHERE Non_unique=0 AND Key_name='PRIMARY';" | awk '{ print $5 '})
+			num_columns_in_key=$(mysql $SOURCE_CONNECTION_STRING -BNe "SHOW KEYS IN $table FROM $db WHERE Non_unique=0 AND Key_name='PRIMARY' ;" | wc -l)
+			unique_key_data_type=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA ='$db' AND TABLE_NAME = '$table' AND COLUMN_NAME = '$unique_key';")
 			
 			#check how many rows are in the table if its larger than CHUNK_SIZE, then lets split it in chunks 
 			if [ -n "$unique_key" ] && [ "$num_columns_in_key" -eq 1 ] && [[ "$unique_key_data_type" == *int* ]]; then
-				num_rows=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "SELECT table_rows FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA ='$db' AND table_name='$table';")
+				num_rows=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT table_rows FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA ='$db' AND table_name='$table';")
 				num_rows_fifty=$((num_rows / 2))
 				num_rows=$((num_rows + num_rows_fifty))				
 			else
-				num_rows=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "SELECT count(*) FROM $db.$table;")
+				num_rows=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT count(*) FROM $db.$table;")
 			fi
 
 			if [ "$num_rows" -gt $CHUNK_SIZE ] ; then
@@ -238,7 +289,7 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 				#echo "unique_key_data_type: $unique_key_data_type"
 
 				if [ -n "$unique_key" ] && [ "$num_columns_in_key" -eq 1 ] && [[ "$unique_key_data_type" == *int* ]]; then
-					max_unique_num=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -BNe "SELECT MAX($unique_key) FROM $db.$table;")
+					max_unique_num=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT MAX($unique_key) FROM $db.$table;")
 					num_chunks=$(( $max_unique_num / $CHUNK_SIZE ))
 					((num_chunks++))
 					echo "Splitting up $db.$table into $num_chunks chunks. using index on column $unique_key"
@@ -257,31 +308,29 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 
 					if [ -n "$unique_key" ] && [ "$num_columns_in_key" -eq 1 ] && [[ "$unique_key_data_type" == *int* ]]; then
 						
-						if [ "$ACTION" == "BOTH" ] ; then
+						if [ "$ACTION" == "MIGRATE" ] ; then
 
 							if [ "$VALIDATE" -eq 1 ] ; then
 								#lets get the count on the source and dest
-								num_rows_source=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT $db -BNe "SELECT COUNT($unique_key) FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end;")
-								num_rows_dest=$(mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db -BNe "SELECT COUNT($unique_key) FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end;")
-								#echo "num_rows_source:$num_rows_source    num_rows_dest:$num_rows_dest "
+								num_rows_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "SELECT COUNT($unique_key) FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end;")
+								num_rows_dest=$(mysql $DESTINATION_CONNECTION_STRING $db -BNe "SELECT COUNT($unique_key) FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end;")
 							fi
 
-							#mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --max_allowed_packet=1000000000 --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table | mysql --max_allowed_packet=1000000000 -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db 2>> $BASE_DIR/migrate_db.errors.log &
 							if [ "$VALIDATE" -eq 1 ] && [ "$num_rows_source" -eq "$num_rows_dest" ] ; then
-								echo "source and destination both match having $num_rows_source rows WHERE $unique_key >= $limit_start AND $unique_key < $limit_end"
+								echo "source and destination table $table both match having $num_rows_source rows WHERE $unique_key >= $limit_start AND $unique_key < $limit_end"
 							elif [ "$VALIDATE" -eq 1 ] && [ "$num_rows_source" -ne "$num_rows_dest" ] ; then
-								echo "source and destination DO NOT MATCH! Source:$num_rows_source rows.  Dest:$num_rows_dest rows  WHERE $unique_key >= $limit_start AND $unique_key < $limit_end"
+								echo "source and destination table $table DO NOT MATCH! Source:$num_rows_source rows.  Dest:$num_rows_dest rows  WHERE $unique_key >= $limit_start AND $unique_key < $limit_end"
 							elif [ "$VALIDATE" -eq 0 ]; then
 								echo "$echotext chunk $j of $num_chunks for $db.$table where $unique_key >= $limit_start AND $unique_key < $limit_end"
-								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
+								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
 							fi
 
 						elif [ "$ACTION" == "DUMP" ]; then
 							echo "$echotext chunk $j of $num_chunks for $db.$table where $unique_key >= $limit_start AND $unique_key < $limit_end"
 							if [ "$FORMAT" == "SQL" ] ; then
-								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
+								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
 							elif [ "$FORMAT" == "INFILE" ] ; then
-								mysql -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end" 2>> $BASE_DIR/migrate_db.errors.log &
+								mysql $SOURCE_CONNECTION_STRING -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end" 2>> $BASE_DIR/migrate_db.errors.log &
 							else
 								echo "Unknown format $FORMAT. exiting..."
 								exit;
@@ -290,8 +339,8 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 					else
 
 						if [ "$VALIDATE" -eq 1 ] ; then
-							num_rows_source=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT $db -BNe "SELECT COUNT(*) FROM $db.$table;")
-							num_rows_dest=$(mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db -BNe "SELECT COUNT(*) FROM $db.$table;")
+							num_rows_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
+							num_rows_dest=$(mysql $DESTINATION_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
 							if [ "$num_rows_source" -eq "$num_rows_dest" ] ; then
 								echo "source and destination both match having $num_rows_source rows,"
 							elif [ "$num_rows_source" -ne "$num_rows_dest" ]; then
@@ -301,14 +350,14 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 						fi
 
 						echo "$echotext chunk $j of $num_chunks for $db.$table where LIMIT $limit_start, $CHUNK_SIZE"
-						if [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 0 ] ; then
-							#mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --max_allowed_packet=1000000000 --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table | mysql --max_allowed_packet=1000000000 -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db 2>> $BASE_DIR/migrate_db.errors.log &
-							( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
+						if [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 0 ] ; then
+							#mysqldump $SOURCE_CONNECTION_STRING --max_allowed_packet=1000000000 --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table | mysql --max_allowed_packet=1000000000 $DESTINATION_CONNECTION_STRING $db 2>> $BASE_DIR/migrate_db.errors.log &
+							( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
 						elif [ "$ACTION" == "DUMP" ]; then
 							if [ "$FORMAT" == "SQL" ] ; then
-								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
+								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
 							elif [ "$FORMAT" == "INFILE" ] ; then
-								mysql -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table LIMIT $limit_start, $CHUNK_SIZE" 2>> $BASE_DIR/migrate_db.errors.log &
+								mysql $SOURCE_CONNECTION_STRING -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table LIMIT $limit_start, $CHUNK_SIZE" 2>> $BASE_DIR/migrate_db.errors.log &
 							else
 								echo "Unknown format $FORMAT. exiting..."
 								exit;
@@ -322,13 +371,13 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 				# sleep a bit if we are at the MAX_THREADS
 				while [ "$(jobs -pr | wc -l)" -gt "$MAX_THREADS" ] ; do sleep 2; done
 
-				if [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 0 ] ; then
-					#mysqldump -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table | mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db 2>> $BASE_DIR/migrate_db.errors.log &
-					( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-0.sql; mysqldump -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table-0.sql ; mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $BASE_DIR/$dir/$db/$table-0.sql ; rm $BASE_DIR/$dir/$db/$table-0.sql ) &
+				if [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 0 ] ; then
+					#mysqldump $SOURCE_CONNECTION_STRING --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table | mysql $DESTINATION_CONNECTION_STRING $db 2>> $BASE_DIR/migrate_db.errors.log &
+					( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-0.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table-0.sql ; mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-0.sql ; rm $BASE_DIR/$dir/$db/$table-0.sql ) &
 				
-				elif [ "$ACTION" == "BOTH" ] && [ "$VALIDATE" -eq 1 ] ; then
-					num_rows_source=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT $db -BNe "SELECT COUNT(*) FROM $db.$table;")
-					num_rows_dest=$(mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db -BNe "SELECT COUNT(*) FROM $db.$table;")
+				elif [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 1 ] ; then
+					num_rows_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
+					num_rows_dest=$(mysql $DESTINATION_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
 					if [ "$num_rows_source" -eq "$num_rows_dest" ] ; then
 						echo "source and destination both match having $num_rows_source rows,"
 					elif [ "$num_rows_source" -ne "$num_rows_dest" ]; then
@@ -336,9 +385,9 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 					fi					
 				elif [ "$ACTION" == "DUMP" ]; then
 					if [ "$FORMAT" == "SQL" ] ; then
-						(echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table.sql; mysqldump -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
+						(echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
 					elif [ "$FORMAT" == "INFILE" ] ; then
-						mysql -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.1' FROM $db.$table" 2>> $BASE_DIR/migrate_db.errors.log &
+						mysql $SOURCE_CONNECTION_STRING -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.1' FROM $db.$table" 2>> $BASE_DIR/migrate_db.errors.log &
 					else
 						echo "Unknown format $FORMAT. exiting..."
 						exit;
@@ -346,21 +395,17 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "BOTH" ] ; then
 				fi
 			fi
 
-
-			#if BOTH and CRC then compute it for each table.
-			if [ "$ACTION" == "BOTH" ] && [ "$CRC" -eq 1 ] ; then
-				crc_source=$(mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT $db -BNe "CHECKSUM TABLE $db.$table;" | awk '{ print $2 '})
-				crc_dest=$(mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db -BNe "CHECKSUM TABLE $db.$table;" | awk '{ print $2 '})
+			#if MIGRATE and CRC then compute it for each table.
+			if [ "$ACTION" == "MIGRATE" ] && [ "$CRC" -eq 1 ] ; then
+				crc_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "CHECKSUM TABLE $db.$table;" | awk '{ print $2 '})
+				crc_dest=$(mysql $DESTINATION_CONNECTION_STRING $db -BNe "CHECKSUM TABLE $db.$table;" | awk '{ print $2 '})
 				if [ "$crc_source" -eq "$crc_dest" ] ; then
 					echo "source and destination CHECKSUMs match."
 				elif [ "$num_rows_source" -ne "$num_rows_dest" ]; then
 					echo "source and destination CHECKSUMs DO NOT MATCH! Source:$crc_source rows.  Dest:$crc_dest "
 				fi		
 			fi
-
-
 		done
-
 	done
 
 elif [ "$ACTION" == "LOAD" ] ; then
@@ -368,19 +413,16 @@ elif [ "$ACTION" == "LOAD" ] ; then
 	list_of_dbs=$(ls -d -1 *)
 	
 	for db in $list_of_dbs ; do
-		#mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT -e "CREATE DATABASE $db;"
-		mysql -h"$dest_ip" -u"$REMOTE_MYSQL_USER" $REMOTE_MYSQL_PASS $DEST_PORT -e "CREATE DATABASE $db;"
+		mysql $DESTINATION_CONNECTION_STRING -e "CREATE DATABASE $db;"
 		echo "loading $LOAD_DIR/$db/the-schema"
-		#mysql -u"$MYSQL_USER" $MYSQL_PASS $SOCKET_FILE $PORT $db < $LOAD_DIR/$db/the-schema
-		mysql -h"$dest_ip" -u"$REMOTE_MYSQL_USER" $REMOTE_MYSQL_PASS $DEST_PORT $db < $LOAD_DIR/$db/the-schema
+		mysql $DESTINATION_CONNECTION_STRING $db < $LOAD_DIR/$db/the-schema
 		if [ "$FORMAT" == "SQL" ] ; then
 			#foreach file in the dir
 			for sql_file in $LOAD_DIR/$db/*.sql ; do
 				# sleep a bit if we are at the MAX_THREADS
 				while [ "$(jobs -pr | wc -l)" -gt "$MAX_THREADS" ] ; do sleep 2; done
 				echo "loading file $sql_file"
-				#mysql -u$MYSQL_USER $MYSQL_PASS $SOCKET_FILE $PORT $db < $sql_file & 
-				mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT $db < $sql_file & 
+				mysql $DESTINATION_CONNECTION_STRING $db < $sql_file & 
 			done
 		elif [ "$FORMAT" == "INFILE" ] ; then
 			#foreach file in the dir
@@ -391,14 +433,13 @@ elif [ "$ACTION" == "LOAD" ] ; then
 				# get the table name from the file name.  ex TABLE.jdjnsdhs
 				filename=$(basename "$infile")
 				TABLE="${filename%.*}"
-				mysql -h"$dest_ip" -u$REMOTE_MYSQL_USER $REMOTE_MYSQL_PASS $DEST_PORT -e "load data infile '$infile' into table $TABLE" $db  & 
+				mysql --local-infile $DESTINATION_CONNECTION_STRING -e "LOAD DATA LOCAL INFILE '$infile' INTO TABLE $TABLE" $db  & 
 			done			
 		else
 			echo "Unknown format $FORMAT. exiting..."
 			exit;
 		fi
 	done
-
 
 fi
 
