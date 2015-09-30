@@ -1,4 +1,4 @@
-# db-migrate
+# migrate_db
 
 A script to either DUMP, LOAD or MIGRATE a mysql database, in a highly parallelized mannar. (i.e. very fast)
 
@@ -10,7 +10,7 @@ You must specify either DUMP, LOAD or MIGRATE for an action
 
 # Usage
 
-    db_migrate.sh [options] [action (DUMP|LOAD|MIGRATE)] [database(s) (grep regex)] [table]
+    migrate_db.sh [options] [action (DUMP|LOAD|MIGRATE)] [database(s) (grep regex)] [table]
 
 ## Options
 
@@ -62,48 +62,48 @@ If no table is specified, we migrate all tables. (either 1 or all)
 
 Dumping database Database8 to disk:
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar DUMP Database8
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar DUMP Database8
 
 note: When this is run a directory is made using the current date and timestamp that contains all of the dump files for each schema
 
 Dumping database Database8 to disk as tab delimited file for performing INFILE LOAD's later
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar --format=INFILE DUMP Database8
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar --format=INFILE DUMP Database8
 
 Load all databases from a dump directory:
 
-    db_migrate.sh --dest_mysql_user=root --dest_mysql_pass=foobar --dest_host=10.1.10.112 --load_dir=/home/user/2014-05-14_09h55m45s LOAD
+    ./migrate_db.sh --dest_mysql_user=root --dest_mysql_pass=foobar --dest_host=10.1.10.112 --load_dir=/home/user/2014-05-14_09h55m45s LOAD
 
 Load just Database8 database from a dump directory:
 
-    db_migrate.sh --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 --load_dir=/home/user/2014-05-14_09h55m45s LOAD Database8
+    ./migrate_db.sh --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 --load_dir=/home/user/2014-05-14_09h55m45s LOAD Database8
 
 Migrating from one server to another using the MIGRATE option:
 
 example of migrating all schemas and all tables:
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 MIGRATE
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 MIGRATE
  
 Example of migrating all databases starting with Database12  and all tables for each
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112  MIGRATE Database12
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112  MIGRATE Database12
 
 Example of migrating all databases starting with Database12  and altering the database engine on the destination
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 --source_mysql_engine=InnoDB --destination_mysql_engine=Deep MIGRATE Database12
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 --source_mysql_engine=InnoDB --destination_mysql_engine=Deep MIGRATE Database12
 
 note: both source_mysql_engine and destination_mysql_engine must be specified.
 
 Example of migrating all databases starting with Database12 and only the Accounts table within them
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112  MIGRATE Database12 Accounts 
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112  MIGRATE Database12 Accounts 
 
 Example of migrating a single table in a given schema (what you want for patching a single table).
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112  MIGRATE Database123 Accounts 
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112  MIGRATE Database123 Accounts 
  
 Example of validating all databases that have been migrated via MIGRATE (row count and CRC check)
 
-    db_migrate.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 --validate --crc  MIGRATE
+    ./migrate_db.sh --source_mysql_user=root --source_mysql_pass=foobar --destination_mysql_user=root --destination_mysql_pass=foobar --destination_mysql_host=10.1.10.112 --validate --crc  MIGRATE
 
 
