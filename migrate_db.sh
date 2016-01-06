@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Author: Vincent S. King
+
 usage()
 {
 	un='\033[4m'
@@ -222,6 +224,7 @@ echo TABLE_GREP_REGEX=$TABLE_GREP_REGEX
 
 if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "MIGRATE" ] ; then
 
+	temporarydatabase="deeptemporarydatabase"
 	dir=$(date "+%Y-%m-%d_%Hh%Mm%Ss")
 	mkdir -m 777 -p $BASE_DIR/$dir
 
@@ -229,7 +232,13 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "MIGRATE" ] ; then
 	#dump the schema skeleton of all databases (no data)
 	for db in $list_of_dbs ; do 
 		mkdir -m 777 $BASE_DIR/$dir/$db
-		mysqldump $SOURCE_CONNECTION_STRING --no-data --skip-add-drop-table --skip-comments $db > $BASE_DIR/$dir/$db/the-schema	
+		mysqldump $SOURCE_CONNECTION_STRING --no-data --skip-add-drop-table --skip-comments $db > $BASE_DIR/$dir/$db/the-schema
+                #echo "------------------------------------------------------------"
+                #echo "If you would like to make edits to the destination schema, do so now..."
+                #echo "note: we will take care of altering the table engine."
+                #echo "edit file: $BASE_DIR/$dir/$db/the-schema"
+                #echo "------------------------------------------------------------"
+                #read -rsp $'Press any key to continue once done editing...\n' -n1 key	
 	done
 
 	#if defined, convert engine from $SOURCE_MYSQL_ENGINE to $DESTINATION_MYSQL_ENGINE within the schema dump
@@ -262,118 +271,115 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "MIGRATE" ] ; then
 			list_of_tables=$(mysql $SOURCE_CONNECTION_STRING -BNe "show tables" $db | grep -x "$TABLE_GREP_REGEX")
 		fi
 
+		# make a tempdb with the tables in source db
+		mysql $SOURCE_CONNECTION_STRING -e"DROP DATABASE IF EXISTS $temporarydatabase"
+		mysql $SOURCE_CONNECTION_STRING -e"CREATE DATABASE $temporarydatabase"
+		mysql $SOURCE_CONNECTION_STRING $temporarydatabase < $BASE_DIR/$dir/$db/the-schema
+		#read -rsp $'Press any key to continue once done editing...\n' -n1 key
 		for table in $list_of_tables ; do
 			echo "$echotext database $db table $table ..."
-			#if [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 0 ] ; then
-				#collect insertion rate stats
-			#	$SCRIPTPATH/get_rate.sh -u$DESTINATION_MYSQL_USER $DESTINATION_MYSQL_PASS $DESTINATION_MYSQL_HOST $db.$table&
-			#fi
-
 			unique_key=$(mysql $SOURCE_CONNECTION_STRING -BNe "SHOW KEYS IN $table FROM $db WHERE Non_unique=0 AND Key_name='PRIMARY';" | awk '{ print $5 '})
-			num_columns_in_key=$(mysql $SOURCE_CONNECTION_STRING -BNe "SHOW KEYS IN $table FROM $db WHERE Non_unique=0 AND Key_name='PRIMARY' ;" | wc -l)
-			unique_key_data_type=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA ='$db' AND TABLE_NAME = '$table' AND COLUMN_NAME = '$unique_key';")
+			primary_columns=($unique_key)
+			ORDERBY=" ORDER BY "	
+			for col in $unique_key ; do
+				ORDERBY+="${col},"
+			done
+			ORDERBY=${ORDERBY::-1}
+			num_rows=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT count(*) FROM $db.$table;")
 			
-			#check how many rows are in the table if its larger than CHUNK_SIZE, then lets split it in chunks 
-			if [ -n "$unique_key" ] && [ "$num_columns_in_key" -eq 1 ] && [[ "$unique_key_data_type" == *int* ]]; then
-				num_rows=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT table_rows FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA ='$db' AND table_name='$table';")
-				num_rows_fifty=$((num_rows / 2))
-				num_rows=$((num_rows + num_rows_fifty))				
-			else
-				num_rows=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT count(*) FROM $db.$table;")
-			fi
-
-			if [ "$num_rows" -gt $CHUNK_SIZE ] ; then
-
-				#echo "unique_key: $unique_key"
-				#echo "num_columns_in_key: $num_columns_in_key"
-				#echo "unique_key_data_type: $unique_key_data_type"
-
-				if [ -n "$unique_key" ] && [ "$num_columns_in_key" -eq 1 ] && [[ "$unique_key_data_type" == *int* ]]; then
-					max_unique_num=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT MAX($unique_key) FROM $db.$table;")
-					num_chunks=$(( $max_unique_num / $CHUNK_SIZE ))
-					((num_chunks++))
-					echo "Splitting up $db.$table into $num_chunks chunks. using index on column $unique_key"
-				else
-					num_chunks=$(( $num_rows / $CHUNK_SIZE ))
-					((num_chunks++))
-					echo "Splitting up $db.$table into $num_chunks chunks. using limit"
-				fi
-				
+			if [ "$num_rows" -gt "$CHUNK_SIZE" ] || [ "$unique_key" != "" ] ; then
+				num_chunks=$(( $num_rows / $CHUNK_SIZE ))
+				#num_chunks=$(( $num_chunks + 1 ))
+				echo "Splitting up $db.$table into $(( $num_chunks + 1 )) chunks."
+				WHERE_CLAUSE=" "
 				for (( i=0, j=1 ; i <= $num_chunks ; i++, j++ )) ; do
-					limit_start=$(( $i * $CHUNK_SIZE))
-					limit_end=$(( $j * $CHUNK_SIZE))
-
 					# sleep a bit if we are at the MAX_THREADS
 					while [ "$(jobs -pr | wc -l)" -gt "$MAX_THREADS" ] ; do sleep 2; done
 
-					if [ -n "$unique_key" ] && [ "$num_columns_in_key" -eq 1 ] && [[ "$unique_key_data_type" == *int* ]]; then
-						
-						if [ "$ACTION" == "MIGRATE" ] ; then
-
-							if [ "$VALIDATE" -eq 1 ] ; then
-								#lets get the count on the source and dest
-								num_rows_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "SELECT COUNT($unique_key) FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end;")
-								num_rows_dest=$(mysql $DESTINATION_CONNECTION_STRING $db -BNe "SELECT COUNT($unique_key) FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end;")
-							fi
-
-							if [ "$VALIDATE" -eq 1 ] && [ "$num_rows_source" -eq "$num_rows_dest" ] ; then
-								echo "source and destination table $table both match having $num_rows_source rows WHERE $unique_key >= $limit_start AND $unique_key < $limit_end"
-							elif [ "$VALIDATE" -eq 1 ] && [ "$num_rows_source" -ne "$num_rows_dest" ] ; then
-								echo "source and destination table $table DO NOT MATCH! Source:$num_rows_source rows.  Dest:$num_rows_dest rows  WHERE $unique_key >= $limit_start AND $unique_key < $limit_end"
-							elif [ "$VALIDATE" -eq 0 ]; then
-								echo "$echotext chunk $j of $num_chunks for $db.$table where $unique_key >= $limit_start AND $unique_key < $limit_end"
-								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
-							fi
-
-						elif [ "$ACTION" == "DUMP" ]; then
-							echo "$echotext chunk $j of $num_chunks for $db.$table where $unique_key >= $limit_start AND $unique_key < $limit_end"
-							if [ "$FORMAT" == "SQL" ] ; then
-								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "$unique_key >= $limit_start AND $unique_key < $limit_end" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
-							elif [ "$FORMAT" == "INFILE" ] ; then
-								mysql $SOURCE_CONNECTION_STRING -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table WHERE $unique_key >= $limit_start AND $unique_key < $limit_end" 2>> $BASE_DIR/migrate_db.errors.log &
-							else
-								echo "Unknown format $FORMAT. exiting..."
-								exit;
-							fi
+					if [ "$VALIDATE" -eq 1 ] ; then
+						num_rows_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
+						num_rows_dest=$(mysql $DESTINATION_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
+						if [ "$num_rows_source" -eq "$num_rows_dest" ] ; then
+							echo "source and destination both match having $num_rows_source rows,"
+						elif [ "$num_rows_source" -ne "$num_rows_dest" ]; then
+							echo "source and destination DO NOT MATCH! Source:$num_rows_source rows.  Dest:$num_rows_dest rows."
 						fi
+						break;
+					fi
+
+					# build the where clause.
+					if [ "$i" == "0" ] ; then
+						WHERE_CLAUSE="1 ${ORDERBY} LIMIT 0, $CHUNK_SIZE"
 					else
+						# if i != 0 then use the composite index in the where clause
+						# select the next chunck of data with a composite index
+						# ex:
+						#   col1 > ...
+						#|| col1 = ... && col2 > ...
+						#|| col1 = ... && col2 = ... && col3 > ...
+						#|| col1 = ... && col2 = ... && col3 = ... && col4 > ...									
+						WHERE_CLAUSE=" "
+						num_items=${#primary_columns[@]}
+						for (( k=0; k<=$num_items-1; k++ )) ; do
+							WHERE_CLAUSE+="("
+							for (( l=0; l<=$k; l++ )) ; do
+								WHERE_CLAUSE+="${primary_columns[l]}"
+								if [ "$l" == "$k" ] ; then
+									WHERE_CLAUSE+=" > "
+								else
+									WHERE_CLAUSE+=" = "
+								fi
+								WHERE_CLAUSE+="(SELECT ${primary_columns[l]} FROM $temporarydatabase.$table FORCE INDEX (PRIMARY) $ORDERBY )"
+								WHERE_CLAUSE+=" AND "
+							done
+							WHERE_CLAUSE=${WHERE_CLAUSE::-5}
+							WHERE_CLAUSE+=") OR "
+						done
+						WHERE_CLAUSE=${WHERE_CLAUSE::-4}
+					fi
 
-						if [ "$VALIDATE" -eq 1 ] ; then
-							num_rows_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
-							num_rows_dest=$(mysql $DESTINATION_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
-							if [ "$num_rows_source" -eq "$num_rows_dest" ] ; then
-								echo "source and destination both match having $num_rows_source rows,"
-							elif [ "$num_rows_source" -ne "$num_rows_dest" ]; then
-								echo "source and destination DO NOT MATCH! Source:$num_rows_source rows.  Dest:$num_rows_dest rows."
-							fi
-							break;
+					# dump the chunk and get the last row dumped for making the next where clause.
+					echo "$echotext chunk $j of $(( $num_chunks + 1 )) for $db.$table "
+					if [ "$FORMAT" == "SQL" ] ; then
+						
+						echo  ${WHERE_CLAUSE}
+	
+						if [ "$i" == "0" ] ; then
+							( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where " ${WHERE_CLAUSE}" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) 													
+							mysql $SOURCE_CONNECTION_STRING $temporarydatabase -e"truncate $table"
+							mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where " 1 ${ORDERBY} LIMIT $(( $CHUNK_SIZE - 1 )),1" $db $table | mysql $SOURCE_CONNECTION_STRING $temporarydatabase
+						else
+							( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where " ${WHERE_CLAUSE} ${ORDERBY} LIMIT ${CHUNK_SIZE}" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) 													
+							mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where " ${WHERE_CLAUSE} ${ORDERBY} LIMIT $(( $CHUNK_SIZE - 1 )),1" $db $table | mysql $SOURCE_CONNECTION_STRING $temporarydatabase
+							mysql $SOURCE_CONNECTION_STRING $temporarydatabase -e"delete from $table limit 1"
 						fi
+						
+					elif [ "$FORMAT" == "INFILE" ] ; then
+						#mysql $SOURCE_CONNECTION_STRING -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table WHERE $WHERE_CLAUSE" 2>> $BASE_DIR/migrate_db.errors.log 
+						mysql $SOURCE_CONNECTION_STRING -BNe"SELECT * FROM $db.$table WHERE $WHERE_CLAUSE" >> $BASE_DIR/$dir/$db/$table.$j 2>> $BASE_DIR/migrate_db.errors.log
 
-						echo "$echotext chunk $j of $num_chunks for $db.$table where LIMIT $limit_start, $CHUNK_SIZE"
-						if [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 0 ] ; then
-							#mysqldump $SOURCE_CONNECTION_STRING --max_allowed_packet=1000000000 --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table | mysql --max_allowed_packet=1000000000 $DESTINATION_CONNECTION_STRING $db 2>> $BASE_DIR/migrate_db.errors.log &
-							( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql ; mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
-						elif [ "$ACTION" == "DUMP" ]; then
-							if [ "$FORMAT" == "SQL" ] ; then
-								( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-$j.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick --where "1 LIMIT $limit_start, $CHUNK_SIZE" $db $table >> $BASE_DIR/$dir/$db/$table-$j.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
-							elif [ "$FORMAT" == "INFILE" ] ; then
-								mysql $SOURCE_CONNECTION_STRING -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.$j' FROM $db.$table LIMIT $limit_start, $CHUNK_SIZE" 2>> $BASE_DIR/migrate_db.errors.log &
-							else
-								echo "Unknown format $FORMAT. exiting..."
-								exit;
-							fi
-						fi
+					else
+						echo "Unknown format $FORMAT. exiting..."
+						exit;
+					fi
+
+					if [ "$ACTION" == "MIGRATE" ] ; then
+						#send over to the destination and delete it when done. (in the background )
+						( mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-$j.sql ; rm $BASE_DIR/$dir/$db/$table-$j.sql ) &
 					fi
 
 				done
-
+		
 			else
+				if [ -z "$unique_key" ] ; then
+					echo "No PRIMARY Key... can't chunk. dumping one large dump file for table $table"
+				fi
 				# sleep a bit if we are at the MAX_THREADS
 				while [ "$(jobs -pr | wc -l)" -gt "$MAX_THREADS" ] ; do sleep 2; done
 
 				if [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 0 ] ; then
 					#mysqldump $SOURCE_CONNECTION_STRING --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table | mysql $DESTINATION_CONNECTION_STRING $db 2>> $BASE_DIR/migrate_db.errors.log &
-					( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-0.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table-0.sql ; mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-0.sql ; rm $BASE_DIR/$dir/$db/$table-0.sql ) &
+					( echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table-0.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table-0.sql ; mysql $DESTINATION_CONNECTION_STRING $db < $BASE_DIR/$dir/$db/$table-0.sql ; rm $BASE_DIR/$dir/$db/$table-0.sql ) &
 				
 				elif [ "$ACTION" == "MIGRATE" ] && [ "$VALIDATE" -eq 1 ] ; then
 					num_rows_source=$(mysql $SOURCE_CONNECTION_STRING $db -BNe "SELECT COUNT(*) FROM $db.$table;")
@@ -385,7 +391,7 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "MIGRATE" ] ; then
 					fi					
 				elif [ "$ACTION" == "DUMP" ]; then
 					if [ "$FORMAT" == "SQL" ] ; then
-						(echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --order-by-primary --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
+						(echo "SET unique_checks=0;SET foreign_key_checks=0;" > $BASE_DIR/$dir/$db/$table.sql; mysqldump $SOURCE_CONNECTION_STRING --no-create-db --no-create-info --compact --skip-add-locks --single-transaction --quick $db $table >> $BASE_DIR/$dir/$db/$table.sql 2>> $BASE_DIR/migrate_db.errors.log ) &
 					elif [ "$FORMAT" == "INFILE" ] ; then
 						mysql $SOURCE_CONNECTION_STRING -e"SELECT * INTO OUTFILE '$BASE_DIR/$dir/$db/$table.1' FROM $db.$table" 2>> $BASE_DIR/migrate_db.errors.log &
 					else
