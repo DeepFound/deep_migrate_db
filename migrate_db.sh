@@ -284,7 +284,8 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "MIGRATE" ] ; then
 			for col in $unique_key ; do
 				ORDERBY+="${col},"
 			done
-			ORDERBY=${ORDERBY::-1}
+			#ORDERBY=${ORDERBY::-1} <-- only works in bash version 4.2-alpha and above
+			ORDERBY=$(echo -n $ORDERBY | head -c -1)
 			num_rows=$(mysql $SOURCE_CONNECTION_STRING -BNe "SELECT count(*) FROM $db.$table;")
 			
 			if [ "$num_rows" -gt "$CHUNK_SIZE" ] || [ "$unique_key" != "" ] ; then
@@ -332,10 +333,12 @@ if [ "$ACTION" == "DUMP" ] || [ "$ACTION" == "MIGRATE" ] ; then
 								WHERE_CLAUSE+="(SELECT ${primary_columns[l]} FROM $temporarydatabase.$table FORCE INDEX (PRIMARY) $ORDERBY )"
 								WHERE_CLAUSE+=" AND "
 							done
-							WHERE_CLAUSE=${WHERE_CLAUSE::-5}
+							#WHERE_CLAUSE=${WHERE_CLAUSE::-5}  <-- only works in bash version 4.2-alpha and above
+							WHERE_CLAUSE=$(echo -n $WHERE_CLAUSE | head -c -5)
 							WHERE_CLAUSE+=") OR "
 						done
-						WHERE_CLAUSE=${WHERE_CLAUSE::-4}
+						#WHERE_CLAUSE=${WHERE_CLAUSE::-4}  <-- only works in bash version 4.2-alpha and above
+						WHERE_CLAUSE=$(echo -n $WHERE_CLAUSE | head -c -4)
 					fi
 
 					# dump the chunk and get the last row dumped for making the next where clause.
