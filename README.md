@@ -1,6 +1,6 @@
 # migrate_db
 
-A script to either DUMP, LOAD or MIGRATE a mysql database, in a highly parallelized mannar. (i.e. very fast)
+A script to either DUMP, LOAD or MIGRATE a mysql database, in a highly parallelized manner. (i.e. very fast)
 
 * DUMP will dump the source database files to disk.
 * LOAD will load a MySQL database with the DUMP'ed files specified.
